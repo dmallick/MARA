@@ -164,11 +164,14 @@ class DataAcquisitionAgent:
     The Data Acquisition Agent is responsible for gathering raw data, primarily
     through web scraping, and posting it to the blackboard.
     Includes a timeout for the scraping process to prevent indefinite hangs.
+    Now includes a retry mechanism for transient errors.
     """
-    def __init__(self, name: str, blackboard: Blackboard):
+    def __init__(self, name: str, blackboard: Blackboard, max_retries: int = 3, retry_delay: int = 5):
         self.name = name
         self.blackboard = blackboard
-        print(f"{self.name}: Initialized.")
+        self.max_retries = max_retries
+        self.retry_delay = retry_delay
+        print(f"{self.name}: Initialized with max_retries={self.max_retries}, retry_delay={self.retry_delay}s.")
         self.blackboard.register_observer("status", self.on_blackboard_change)
 
     def on_blackboard_change(self, key, value):
@@ -191,26 +194,29 @@ class DataAcquisitionAgent:
                 raise e
 
     def execute_task(self):
-        """Executes the data acquisition task when delegated."""
-        print(f"\n{self.name}: Task delegated. Starting web scraping.")
+        """Executes the data acquisition task when delegated, with retries."""
+        print(f"\n{self.name}: Task delegated. Starting web scraping (with retries).")
         
         task = self.blackboard.get_data("current_task")
 
         if not task or not isinstance(task, dict) or task.get("type") != "web_scrape":
             error_msg = f"Error: No valid web_scrape task found on blackboard or task type mismatch. Current task: {task}"
             print(f"{self.name}: {error_msg}")
+            self.blackboard.set_data("error_message", error_msg) # Post error to blackboard
             self.blackboard.set_status("data_acquisition_failed")
             self.blackboard.set_data("final_report", error_msg)
             return
 
         user_query_for_scraper = self.blackboard.get_data("user_query")
-        source_url = task.get("source_url", "https://example.com")
+        source_url = task.get("source_url", "https://perinim.github.io/projects") # Ensure source_url is consistent
 
         openai_key = os.getenv("OPENAI_API_KEY")
         if not openai_key:
-            print(f"{self.name}: ERROR: OPENAI_API_KEY environment variable not set. Cannot proceed with scraping.")
+            error_msg = "ERROR: OPENAI_API_KEY environment variable not set. Cannot proceed with scraping."
+            print(f"{self.name}: {error_msg}")
+            self.blackboard.set_data("error_message", error_msg) # Post error to blackboard
             self.blackboard.set_status("data_acquisition_failed")
-            self.blackboard.set_data("final_report", "Error: OPENAI_API_KEY is not set.")
+            self.blackboard.set_data("final_report", error_msg)
             return
 
         graph_config = {
@@ -220,32 +226,33 @@ class DataAcquisitionAgent:
            },
         }
 
-        try:
-            print(f"{self.name}: Initializing SmartScraperGraph for source: {source_url}")
-            scraper = SmartScraperGraph(
-                prompt=user_query_for_scraper,
-                source=source_url,
-                config=graph_config
-            )
-            
-            result = self._run_scraper_with_timeout(scraper, timeout=60)
-            
-            self.blackboard.set_data("raw_scraped_data", result)
-            self.blackboard.set_status("raw_data_acquired")
-            print(f"{self.name}: Scraping complete. Raw data posted to blackboard.")
-            print(f"Raw scraped data (partial view): {json.dumps(result, indent=2)[:500]}...")
-        except TimeoutError as e:
-            print(f"{self.name}: ERROR: Scraping operation failed due to timeout - {e}")
-            self.blackboard.set_status("data_acquisition_failed")
-            self.blackboard.set_data("final_report", f"Error: Web scraping timed out: {e}")
-        except requests.exceptions.RequestException as e:
-            print(f"{self.name}: ERROR: Network request failed during scraping - {e}")
-            self.blackboard.set_status("data_acquisition_failed")
-            self.blackboard.set_data("final_report", f"Error: Network issue during web scraping: {e}")
-        except Exception as e:
-            print(f"{self.name}: ERROR: An unexpected error occurred during scraping - {e}")
-            self.blackboard.set_status("data_acquisition_failed")
-            self.blackboard.set_data("final_report", f"Error: Web scraping failed with unexpected error: {e}")
+        for attempt in range(self.max_retries):
+            try:
+                print(f"{self.name}: Initializing SmartScraperGraph for source: {source_url} (Attempt {attempt + 1}/{self.max_retries})")
+                scraper = SmartScraperGraph(
+                    prompt=user_query_for_scraper,
+                    source=source_url,
+                    config=graph_config
+                )
+                
+                result = self._run_scraper_with_timeout(scraper, timeout=60)
+                
+                self.blackboard.set_data("raw_scraped_data", result)
+                self.blackboard.set_status("raw_data_acquired")
+                print(f"{self.name}: Scraping complete. Raw data posted to blackboard.")
+                print(f"Raw scraped data (partial view): {json.dumps(result, indent=2)[:500]}...")
+                return # Success, exit loop
+            except (TimeoutError, requests.exceptions.RequestException, Exception) as e:
+                error_msg = f"ERROR: Scraping attempt {attempt + 1} failed: {e}"
+                print(f"{self.name}: {error_msg}")
+                if attempt < self.max_retries - 1:
+                    print(f"{self.name}: Retrying in {self.retry_delay} seconds...")
+                    time.sleep(self.retry_delay)
+                else:
+                    print(f"{self.name}: All scraping attempts failed.")
+                    self.blackboard.set_data("error_message", error_msg) # Post final error to blackboard
+                    self.blackboard.set_status("data_acquisition_failed")
+                    self.blackboard.set_data("final_report", f"Error: Web scraping failed after {self.max_retries} attempts: {e}")
         time.sleep(1)
 
 
@@ -299,9 +306,11 @@ class KnowledgeSynthesisAgent:
             print(f"{self.name}: Knowledge synthesis complete. Synthesized data posted (with timestamp and age).")
             print(f"Synthesized knowledge (partial view): {json.dumps(synthesized_data, indent=2)[:500]}...")
         else:
-            print(f"{self.name}: No raw data found for synthesis. Setting status to 'knowledge_synthesis_failed'.")
+            error_msg = "No raw data found for synthesis."
+            print(f"{self.name}: {error_msg}")
+            self.blackboard.set_data("error_message", error_msg) # Post error to blackboard
             self.blackboard.set_status("knowledge_synthesis_failed")
-            self.blackboard.set_data("final_report", "Error: Knowledge Synthesis Agent failed due to missing raw data.")
+            self.blackboard.set_data("final_report", error_msg)
         time.sleep(1)
 
 
@@ -338,9 +347,11 @@ class DataValidationAgent:
             self.blackboard.set_status("data_validated")
             print(f"{self.name}: Data validation complete. Result posted: {validation_result}")
         else:
-            print(f"{self.name}: No synthesized data found for validation. Setting status to 'data_validation_failed'.")
+            error_msg = "No synthesized data found for validation."
+            print(f"{self.name}: {error_msg}")
+            self.blackboard.set_data("error_message", error_msg) # Post error to blackboard
             self.blackboard.set_status("data_validation_failed")
-            self.blackboard.set_data("final_report", "Error: Data Validation Agent failed due to missing synthesized knowledge.")
+            self.blackboard.set_data("final_report", error_msg)
         time.sleep(1)
 
 
@@ -429,9 +440,11 @@ class AnalysisAndReportingAgent:
         task = self.blackboard.get_data("current_task")
 
         if task is None:
-            print(f"{self.name}: ERROR: 'current_task' is None. Cannot execute summary task.")
-            self.blackboard.set_data("final_report", "Error: Cannot generate summary, no valid task found.")
+            error_msg = "ERROR: 'current_task' is None. Cannot execute summary task."
+            print(f"{self.name}: {error_msg}")
+            self.blackboard.set_data("error_message", error_msg) # Post error to blackboard
             self.blackboard.set_status("failed")
+            self.blackboard.set_data("final_report", "Error: Cannot generate summary, no valid task found.")
             return
 
         synthesized_data = self.blackboard.get_data(task.get("from_data_key", "synthesized_knowledge"))
@@ -454,10 +467,11 @@ class AnalysisAndReportingAgent:
             self.blackboard.set_status("complete")
             print(f"{self.name}: Key findings summary generated and posted.")
         else:
-            summary_report_text += "No synthesized data available to summarize."
-            self.blackboard.set_data("final_report", summary_report_text)
+            error_msg = "No synthesized data available to summarize."
+            print(f"{self.name}: {error_msg}")
+            self.blackboard.set_data("error_message", error_msg) # Post error to blackboard
             self.blackboard.set_status("failed")
-            print(f"{self.name}: Failed to generate summary: No data.")
+            self.blackboard.set_data("final_report", error_msg)
         time.sleep(1)
 
     def execute_filter_by_author_task(self):
@@ -466,9 +480,11 @@ class AnalysisAndReportingAgent:
         task = self.blackboard.get_data("current_task")
 
         if task is None:
-            print(f"{self.name}: ERROR: 'current_task' is None. Cannot execute filter by author task.")
-            self.blackboard.set_data("final_report", "Error: Cannot filter by author, no valid task found.")
+            error_msg = "ERROR: 'current_task' is None. Cannot execute filter by author task."
+            print(f"{self.name}: {error_msg}")
+            self.blackboard.set_data("error_message", error_msg) # Post error to blackboard
             self.blackboard.set_status("failed")
+            self.blackboard.set_data("final_report", error_msg)
             return
 
         author_to_filter = task.get("author")
@@ -512,13 +528,15 @@ class AnalysisAndReportingAgent:
         task = self.blackboard.get_data("current_task")
 
         if task is None:
-            print(f"{self.name}: ERROR: 'current_task' is None. Cannot execute visualization task.")
-            self.blackboard.set_data("final_report", "Error: Cannot generate visualization, no valid task found.")
+            error_msg = "ERROR: 'current_task' is None. Cannot execute visualization task."
+            print(f"{self.name}: {error_msg}")
+            self.blackboard.set_data("error_message", error_msg) # Post error to blackboard
             self.blackboard.set_status("failed")
+            self.blackboard.set_data("final_report", error_msg)
             return
 
         raw_data = self.blackboard.get_data(task.get("from_data_key", "raw_scraped_data"))
-        synthesized_data = self.blackboard.get_data("synthesized_knowledge") # Get synthesized data for timestamp
+        synthesized_data = self.blackboard.get_data("synthesized_knowledge")
 
         viz_report_text = f"### MARA Research Report - Article Distribution by Author (ASCII Bar Chart)\n\n"
         if synthesized_data and "timestamp" in synthesized_data["extracted_entities"]:
@@ -568,26 +586,19 @@ class AnalysisAndReportingAgent:
 
     def execute_failure_report(self):
         """Generates a simple report if a previous step failed."""
+        print(f"\n{self.name}: Executing failure report.")
         failure_message = self.blackboard.get_data("final_report")
-        if not failure_message:
-            current_status = self.blackboard.get_status()
-            if current_status == "data_acquisition_failed":
-                failure_message = "Data Acquisition Agent failed to retrieve data."
-            elif current_status == "knowledge_synthesis_failed":
-                failure_message = "Knowledge Synthesis Agent failed to process data."
-            elif current_status == "data_validation_failed":
-                failure_message = "Data Validation Agent failed to validate data."
-            elif current_status == "unsupported_query":
-                failure_message = "Orchestrator did not recognize the query as supported."
-            else:
-                failure_message = "An unknown error occurred during the research process."
-        
+        error_details = self.blackboard.get_data("error_message") # Retrieve error details
+
         report_text = f"### MARA Research Report - Process Failed\n\n"
-        report_text += f"Reason for failure: {failure_message}\n\n"
+        report_text += f"**Overall Process Status:** {self.blackboard.get_status()}\n\n"
+        report_text += f"Reason for failure: {failure_message if failure_message else 'An unspecified error occurred.'}\n"
+        if error_details:
+            report_text += f"Error Details: {error_details}\n\n"
         report_text += "Please review the process logs for more details."
         
         self.blackboard.set_data("final_report", report_text)
-        self.blackboard.set_status("failed")
+        # Note: Status should already be 'failed' or similar, not resetting here.
         print(f"{self.name}: Failure report generated and posted to blackboard.")
         time.sleep(1)
 
@@ -602,14 +613,11 @@ class DataRefreshAgent:
         self.stale_threshold = stale_threshold
         print(f"{self.name}: Initialized with stale threshold: {self.stale_threshold} cycles.")
         self.blackboard.register_observer("status", self.on_blackboard_change)
-        # Also observe 'synthesized_knowledge' to react to its age
         self.blackboard.register_observer("synthesized_knowledge", self.on_blackboard_change)
 
     def on_blackboard_change(self, key, value):
-        # We want to check for staleness when the system is 'complete' and data exists
         if key == "status" and value == "complete":
             self._check_for_staleness()
-        # Also check if synthesized knowledge itself was updated
         elif key == "synthesized_knowledge" and value is not None:
             self._check_for_staleness()
 
@@ -621,13 +629,15 @@ class DataRefreshAgent:
             if current_age >= self.stale_threshold:
                 print(f"\n{self.name}: DETECTED STALE DATA! Synthesized knowledge is {current_age} cycles old (threshold: {self.stale_threshold}).")
                 print(f"{self.name}: Requesting data refresh from Orchestrator.")
-                # Trigger a data refresh by updating blackboard status
-                self.blackboard.set_data("human_feedback", "refresh data") # Simulate human asking for refresh
+                self.blackboard.set_data("human_feedback", "refresh data")
                 self.blackboard.set_status("awaiting_re_orchestration")
             else:
                 print(f"{self.name}: Synthesized knowledge is fresh ({current_age} cycles). No refresh needed.")
         else:
-            print(f"{self.name}: No synthesized knowledge or age info found to check staleness.")
+            # Only print if 'synthesized_knowledge' is explicitly being checked and found missing
+            if self.blackboard.get_status() == "complete" or self.blackboard.get_status() == "synthesized_knowledge":
+                print(f"{self.name}: No synthesized knowledge or age info found to check staleness.")
+
 
 class HumanInTheLoopAgent:
     """
@@ -641,8 +651,11 @@ class HumanInTheLoopAgent:
         self.blackboard.register_observer("status", self.on_blackboard_change)
 
     def on_blackboard_change(self, key, value):
-        if key == "status" and (value == "complete" or value == "failed"):
+        if key == "status" and (value == "complete" or value == "failed" or value == "timed_out" or value == "unsupported_query"):
             self.execute_feedback_prompt()
+        elif key == "status" and value == "complete_with_feedback": # Handle the new status
+            self.execute_feedback_prompt()
+
 
     def execute_feedback_prompt(self):
         print(f"\n{self.name}: Workflow complete/failed. Engaging human for feedback.")
@@ -671,59 +684,56 @@ if __name__ == "__main__":
     print("Starting MARA Phase II Development Workflow...")
 
     orchestrator = OrchestratorAgent("Orchestrator", shared_blackboard)
-    data_acquisition = DataAcquisitionAgent("DataAcquisitionAgent", shared_blackboard)
+    data_acquisition = DataAcquisitionAgent("DataAcquisitionAgent", shared_blackboard, max_retries=3, retry_delay=5) # Initialize with retries
     knowledge_synthesis = KnowledgeSynthesisAgent("KnowledgeSynthesisAgent", shared_blackboard)
     data_validation = DataValidationAgent("DataValidationAgent", shared_blackboard)
     analysis_reporting = AnalysisAndReportingAgent("AnalysisAndReportingAgent", shared_blackboard)
-    data_refresh = DataRefreshAgent("DataRefreshAgent", shared_blackboard, stale_threshold=2) # Initialize refresh agent
+    data_refresh = DataRefreshAgent("DataRefreshAgent", shared_blackboard, stale_threshold=2)
     human_in_loop = HumanInTheLoopAgent("HumanInTheLoopAgent", shared_blackboard)
 
     print("\n--- Initiating Research Process ---")
     user_initial_query = "List me all the articles on the page with their description and the author."
     orchestrator.run(user_initial_query)
 
-    max_wait_time = 360 # Increased wait time for full workflow including human input and re-orchestration
+    max_wait_time = 360 
     start_time = time.time()
     
-    # Main loop to simulate continuous operation and agent reactivity
     run_cycles = 0
     while True:
         current_status = shared_blackboard.get_status()
         print(f"\nMain Loop Cycle {run_cycles}: Current status: {current_status}...")
         
         # Simulate passage of time and age data
-        if run_cycles > 0 and current_status not in ["awaiting_re_orchestration", "task_delegated_to_data_acquisition", "summarize_requested", "filter_by_author_requested", "visualize_requested"]:
-             shared_blackboard.age_data("synthesized_knowledge") # Age data each cycle
+        # Only age data if synthesized_knowledge exists and we're not in an active re-orchestration/task state
+        if run_cycles > 0 and \
+           "synthesized_knowledge" in shared_blackboard._data and \
+           current_status not in ["awaiting_re_orchestration", "task_delegated_to_data_acquisition", "summarize_requested", "filter_by_author_requested", "visualize_requested"]:
+             shared_blackboard.age_data("synthesized_knowledge") 
 
         if current_status == "awaiting_re_orchestration":
             orchestrator.process_feedback() 
         elif current_status == "age_data_requested":
-            # This status is now handled by DataRefreshAgent internally if it detects staleness
-            # The explicit 'age data' human command should just age data and then revert to complete
             shared_blackboard.age_data("synthesized_knowledge")
-            shared_blackboard.set_status("complete") # Go back to complete so HumanInTheLoop can prompt again
+            shared_blackboard.set_status("complete")
             print("Main: Data aging complete via human command. Please request a new report to see updated age.")
 
-        elif current_status in ["complete", "failed", "unsupported_query", "complete_with_feedback"]:
-            # If system is complete, let the HumanInTheLoop agent trigger its prompt
-            # If the DataRefreshAgent *proactively* triggers a refresh, the status will change
-            # to 'awaiting_re_orchestration' and the Orchestrator will pick it up.
-            pass # The loop will continue, allowing HumanInTheLoop or DataRefreshAgent to act
-
-
-        # Break conditions for the main workflow loop
-        if current_status in ["failed", "unsupported_query", "complete_with_feedback"] and shared_blackboard.get_data("human_feedback") and shared_blackboard.get_data("human_feedback").lower() == "exit":
-            print("Main: User exited the process.")
+        # Break conditions for the main workflow loop, including a new 'exit' condition
+        # The main loop needs to terminate when the HumanInTheLoopAgent signals an 'exit' and the status is 'complete_with_feedback'
+        if shared_blackboard.get_data("human_feedback") and shared_blackboard.get_data("human_feedback").lower() == "exit" and \
+           current_status in ["complete", "failed", "unsupported_query", "complete_with_feedback"]:
+            print("Main: User explicitly exited the process.")
             break
+        # Also break if system is in a terminal status and no further human interaction is expected (e.g., after an unsupported query or a hard failure)
+        elif current_status in ["failed", "unsupported_query", "timed_out"]:
+             break
         
-        # Check if the process has been running too long without a clear completion/exit
         if (time.time() - start_time) > max_wait_time:
             print("Main: Workflow timed out.")
             shared_blackboard.set_status("timed_out") 
             break
         
         run_cycles += 1
-        time.sleep(2) # Short delay for readability in console
+        time.sleep(2)
 
     print("\n--- Workflow Execution Finished ---")
     final_report = shared_blackboard.get_data("final_report")
