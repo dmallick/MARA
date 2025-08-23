@@ -20,19 +20,16 @@ class Blackboard:
         """Posts data to the blackboard under a specific key."""
         with self._lock:
             self._data[key] = value
-            print(f"Blackboard: Data '{key}' posted. Value: {value}") # Added debug print for value
+            print(f"Blackboard: Data '{key}' posted. Value: {value}")
             self._notify_observers(key)
 
     def get_data(self, key: str):
         """Retrieves data from the blackboard."""
-        print(f"Blackboard - get_data: Attempting to acquire lock for key: '{key}'") # Added debug print
+        print(f"Blackboard - get_data: Attempting to acquire lock for key: '{key}'")
         with self._lock:
             retrieved_value = self._data.get(key)
-            print(f"Blackboard - get_data: Lock acquired for key: '{key}'. Value: {retrieved_value}") # Added debug print
+            print(f"Blackboard - get_data: Lock acquired for key: '{key}'. Value: {retrieved_value}")
             return retrieved_value
-        # The lock is automatically released here when exiting the 'with' block.
-        # This print statement would technically execute *after* the lock is released.
-        # print(f"Blackboard - get_data: Lock released for key: '{key}'") # This line is unreachable due to the return statement.
 
     def set_status(self, new_status: str):
         """Updates the overall system status on the blackboard."""
@@ -60,13 +57,10 @@ class Blackboard:
         callbacks_to_run = []
         with self._lock:
             if key in self._observers:
-                callbacks_to_run = list(self._observers[key]) # Make a copy to avoid issues if list changes during iteration
+                callbacks_to_run = list(self._observers[key])
 
         for callback in callbacks_to_run:
             try:
-                # Pass the latest value from the blackboard (re-acquiring the lock if necessary inside callback)
-                # or pass a copy of the value at the time of notification
-                # For simplicity, we directly call it, understanding it may implicitly re-acquire RLock
                 callback_value = self.get_data(key) if key != "status" else self.get_status()
                 callback(key, callback_value)
             except Exception as e:
@@ -82,7 +76,8 @@ class Blackboard:
                "extracted_entities" in self._data[key] and \
                "data_age" in self._data[key]["extracted_entities"]:
                 self._data[key]["extracted_entities"]["data_age"] += 1
-                print(f"Blackboard: Data '{key}' aged to {self._data[key]['extracted_entities']['data_age']}.")
+                print(f"Blackboard: Data '{key}' aged to {self._data[key]['extracted_entities']['data_age']} cycles.")
+                self._notify_observers(key) # Notify observers after aging the data
 
 
 # Instantiate the central blackboard
@@ -112,7 +107,7 @@ class OrchestratorAgent:
         
         if "articles" in user_query.lower() and "description" in user_query.lower() and "author" in user_query.lower():
             task = {"type": "web_scrape", "target": "articles_info", "source_url": "https://perinim.github.io/projects"}
-            print(f"{self.name}: Decomposed query. Delegating 'web_scrape' task. Task object to set: {task}") # Added debug
+            print(f"{self.name}: Decomposed query. Delegating 'web_scrape' task. Task object to set: {task}")
             
             self.blackboard.set_data("current_task", task)
             self.blackboard.set_status("task_delegated_to_data_acquisition")
@@ -128,27 +123,16 @@ class OrchestratorAgent:
         """
         print(f"\n{self.name}: Processing human feedback.")
         feedback = self.blackboard.get_data("human_feedback")
-        original_query = self.blackboard.get_data("user_query") # Get the original query for context
-
-        # --- DEBUG START ---
-        print(f"{self.name}: Debug: Feedback retrieved by Orchestrator: '{feedback}' (Type: {type(feedback)})")
-        if feedback:
-            print(f"{self.name}: Debug: Lowercased feedback: '{feedback.lower()}'")
-            print(f"{self.name}: Debug: Check for 'summarize key findings' in feedback: {'summarize key findings' in feedback.lower()}")
-            print(f"{self.name}: Debug: Check for 'articles by author' in feedback: {'articles by author' in feedback.lower()}")
-            print(f"{self.name}: Debug: Check for 'show article distribution' in feedback: {'show article distribution' in feedback.lower()}") # New debug
-        # --- DEBUG END ---
+        original_query = self.blackboard.get_data("user_query")
 
         if feedback and "summarize key findings" in feedback.lower():
             print(f"{self.name}: Human requested summary of key findings. Delegating summary task to Analysis & Reporting Agent.")
             summary_task = {"type": "summarize_findings", "from_data_key": "synthesized_knowledge", "original_query": original_query}
             self.blackboard.set_data("current_task", summary_task)
-            self.blackboard.set_status("summarize_requested") # New status to trigger summary in Analysis agent
+            self.blackboard.set_status("summarize_requested")
         elif feedback and "articles by author" in feedback.lower():
-            # Extract author name from feedback - a simplified approach for now
             author_keyword_index = feedback.lower().find("articles by author")
             author_name_start_index = author_keyword_index + len("articles by author")
-            # This is a very basic parsing; a real system would use NLP
             author_name = feedback[author_name_start_index:].strip("?. ").strip()
             if author_name:
                 print(f"{self.name}: Human requested articles by author '{author_name}'. Delegating filter task to Analysis & Reporting Agent.")
@@ -158,14 +142,20 @@ class OrchestratorAgent:
             else:
                 print(f"{self.name}: Could not extract author name from feedback: '{feedback}'.")
                 self.blackboard.set_status("complete_with_feedback")
-        elif feedback and "show article distribution by author" in feedback.lower(): # New condition for visualization
+        elif feedback and "show article distribution by author" in feedback.lower():
             print(f"{self.name}: Human requested article distribution by author. Delegating visualization task to Analysis & Reporting Agent.")
             viz_task = {"type": "visualize_author_distribution", "from_data_key": "raw_scraped_data", "original_query": original_query}
             self.blackboard.set_data("current_task", viz_task)
             self.blackboard.set_status("visualize_requested")
+        elif feedback and "refresh data" in feedback.lower(): # Orchestrator handles explicit refresh request
+            print(f"{self.name}: Human requested data refresh. Re-delegating data acquisition task.")
+            # Trigger a fresh data acquisition
+            refresh_task = {"type": "web_scrape", "target": "articles_info", "source_url": "https://perinim.github.io/projects"}
+            self.blackboard.set_data("current_task", refresh_task)
+            self.blackboard.set_status("task_delegated_to_data_acquisition")
         else:
             print(f"{self.name}: Human feedback received but no specific follow-up action identified for: '{feedback}'.")
-            self.blackboard.set_status("complete_with_feedback") # New status for graceful exit after feedback
+            self.blackboard.set_status("complete_with_feedback")
         time.sleep(1)
 
 
@@ -204,17 +194,9 @@ class DataAcquisitionAgent:
         """Executes the data acquisition task when delegated."""
         print(f"\n{self.name}: Task delegated. Starting web scraping.")
         
-        # --- DEBUG START ---
-        print(f"{self.name}: Debug: Raw blackboard _data before get_data('current_task'): {self.blackboard._data}")
-        # --- DEBUG END ---
-
         task = self.blackboard.get_data("current_task")
-        
-        # --- DEBUG START ---
-        print(f"{self.name}: Debug: Value retrieved for 'current_task': {task}")
-        # --- DEBUG END ---
 
-        if not task or not isinstance(task, dict) or task.get("type") != "web_scrape": # More robust check
+        if not task or not isinstance(task, dict) or task.get("type") != "web_scrape":
             error_msg = f"Error: No valid web_scrape task found on blackboard or task type mismatch. Current task: {task}"
             print(f"{self.name}: {error_msg}")
             self.blackboard.set_status("data_acquisition_failed")
@@ -251,7 +233,6 @@ class DataAcquisitionAgent:
             self.blackboard.set_data("raw_scraped_data", result)
             self.blackboard.set_status("raw_data_acquired")
             print(f"{self.name}: Scraping complete. Raw data posted to blackboard.")
-            # Print a controlled amount of data, as full JSON can be very long
             print(f"Raw scraped data (partial view): {json.dumps(result, indent=2)[:500]}...")
         except TimeoutError as e:
             print(f"{self.name}: ERROR: Scraping operation failed due to timeout - {e}")
@@ -289,13 +270,13 @@ class KnowledgeSynthesisAgent:
         raw_data = self.blackboard.get_data("raw_scraped_data")
 
         if raw_data:
-            # Added data_age initialization here
+            # Data_age is reset to 0 upon fresh synthesis
             synthesized_output = {"articles_summary": [], "authors": set(), "timestamp": datetime.now().isoformat(), "data_age": 0} 
             if isinstance(raw_data, dict) and "content" in raw_data and isinstance(raw_data["content"], list):
                 for article in raw_data["content"]:
                     title = article.get("title", "N/A")
                     description = article.get("description", "N/A")
-                    author = article.get("author", "NA") # Default to "NA" if author is missing
+                    author = article.get("author", "NA")
                     
                     if author != "NA":
                         synthesized_output["authors"].add(author)
@@ -307,7 +288,7 @@ class KnowledgeSynthesisAgent:
                     }
                     synthesized_output["articles_summary"].append(summary_point)
             
-            synthesized_output["authors"] = list(synthesized_output["authors"]) # Convert set to list for JSON serialization
+            synthesized_output["authors"] = list(synthesized_output["authors"])
 
             synthesized_data = {
                 "summary": "Synthesized key information from acquired raw data.",
@@ -382,7 +363,7 @@ class AnalysisAndReportingAgent:
             self.execute_summary_task()
         elif key == "status" and value == "filter_by_author_requested":
             self.execute_filter_by_author_task()
-        elif key == "status" and value == "visualize_requested": # New condition for visualization task
+        elif key == "status" and value == "visualize_requested":
             self.execute_visualization_task()
         elif key == "status" and (value in ["data_acquisition_failed", "unsupported_query", "knowledge_synthesis_failed", "data_validation_failed"]):
             self.execute_failure_report()
@@ -395,9 +376,8 @@ class AnalysisAndReportingAgent:
         
         report_text = "### MARA Research Report\n\n"
         report_text += f"**Overall Process Status:** {self.blackboard.get_status()}\n\n"
-        if synthesized_data and "timestamp" in synthesized_data["extracted_entities"]: # Display timestamp
+        if synthesized_data and "timestamp" in synthesized_data["extracted_entities"]:
              report_text += f"**Report Generated At:** {synthesized_data['extracted_entities']['timestamp']}\n"
-             # Display data age
              report_text += f"**Synthesized Data Age:** {synthesized_data['extracted_entities'].get('data_age', 'N/A')} cycles\n\n"
 
 
@@ -423,7 +403,6 @@ class AnalysisAndReportingAgent:
                 for item in synthesized_data["extracted_entities"]["articles_summary"]:
                     report_text += f"- **Title:** {item.get('title', 'N/A')}\n  - **Author:** {item.get('author', 'N/A')}\n  - **Snippet:** {item.get('description_snippet', 'N/A')}\n\n"
             
-            # New Analytical Insight: Unique Authors
             unique_authors = synthesized_data["extracted_entities"].get("authors", [])
             if unique_authors:
                 report_text += f"\n**Unique Authors Identified:** {', '.join(unique_authors)}\n"
@@ -460,7 +439,6 @@ class AnalysisAndReportingAgent:
         summary_report_text = f"### MARA Research Report - Key Findings Summary\n\n"
         if synthesized_data and "timestamp" in synthesized_data["extracted_entities"]:
              summary_report_text += f"**Summary Generated At:** {synthesized_data['extracted_entities']['timestamp']}\n"
-             # Display data age
              summary_report_text += f"**Synthesized Data Age:** {synthesized_data['extracted_entities'].get('data_age', 'N/A')} cycles\n\n"
 
         if synthesized_data and synthesized_data.get("extracted_entities", {}).get("articles_summary"):
@@ -473,7 +451,7 @@ class AnalysisAndReportingAgent:
             summary_report_text += f"Requested follow-up: '{self.blackboard.get_data('human_feedback')}'\n"
             
             self.blackboard.set_data("final_report", summary_report_text)
-            self.blackboard.set_status("complete") # Mark as complete after summary
+            self.blackboard.set_status("complete")
             print(f"{self.name}: Key findings summary generated and posted.")
         else:
             summary_report_text += "No synthesized data available to summarize."
@@ -495,12 +473,11 @@ class AnalysisAndReportingAgent:
 
         author_to_filter = task.get("author")
         raw_data = self.blackboard.get_data(task.get("from_data_key", "raw_scraped_data"))
-        synthesized_data = self.blackboard.get_data("synthesized_knowledge") # Get synthesized data for timestamp
+        synthesized_data = self.blackboard.get_data("synthesized_knowledge")
 
         filter_report_text = f"### MARA Research Report - Articles by Author: '{author_to_filter}'\n\n"
         if synthesized_data and "timestamp" in synthesized_data["extracted_entities"]:
              filter_report_text += f"**Generated At:** {synthesized_data['extracted_entities']['timestamp']}\n"
-             # Display data age
              filter_report_text += f"**Synthesized Data Age:** {synthesized_data['extracted_entities'].get('data_age', 'N/A')} cycles\n\n"
         
         found_articles = []
@@ -546,7 +523,6 @@ class AnalysisAndReportingAgent:
         viz_report_text = f"### MARA Research Report - Article Distribution by Author (ASCII Bar Chart)\n\n"
         if synthesized_data and "timestamp" in synthesized_data["extracted_entities"]:
              viz_report_text += f"**Generated At:** {synthesized_data['extracted_entities']['timestamp']}\n"
-             # Display data age
              viz_report_text += f"**Synthesized Data Age:** {synthesized_data['extracted_entities'].get('data_age', 'N/A')} cycles\n\n"
         
         if raw_data and isinstance(raw_data, dict) and "content" in raw_data and isinstance(raw_data["content"], list):
@@ -557,27 +533,25 @@ class AnalysisAndReportingAgent:
             
             if author_counts:
                 max_articles = max(author_counts.values())
-                if max_articles == 0: # Avoid division by zero if no articles are found
+                if max_articles == 0:
                     viz_report_text += "No articles found to visualize author distribution.\n"
                     self.blackboard.set_data("final_report", viz_report_text)
                     self.blackboard.set_status("complete")
                     print(f"{self.name}: No articles found for visualization.")
                     return
 
-                viz_report_text += "```\n" # Start of code block for monospace text
+                viz_report_text += "```\n"
                 viz_report_text += "Article Distribution by Author:\n"
                 viz_report_text += "--------------------------------\n"
                 
-                # Sort authors for consistent output
                 sorted_authors = sorted(author_counts.keys())
 
                 for author in sorted_authors:
                     count = author_counts[author]
-                    # Scale bar length for better visibility in console
-                    bar_length = int((count / max_articles) * 30) # Max bar length 30 characters
+                    bar_length = int((count / max_articles) * 30)
                     bar = '#' * bar_length
                     viz_report_text += f"{author.ljust(20)} | {bar} ({count})\n"
-                viz_report_text += "```\n" # End of code block
+                viz_report_text += "```\n"
             else:
                 viz_report_text += "No authors or articles found to generate distribution.\n"
         else:
@@ -617,6 +591,43 @@ class AnalysisAndReportingAgent:
         print(f"{self.name}: Failure report generated and posted to blackboard.")
         time.sleep(1)
 
+class DataRefreshAgent:
+    """
+    The Data Refresh Agent monitors the freshness of the synthesized knowledge
+    and can trigger a data re-acquisition if data is deemed stale.
+    """
+    def __init__(self, name: str, blackboard: Blackboard, stale_threshold: int = 2):
+        self.name = name
+        self.blackboard = blackboard
+        self.stale_threshold = stale_threshold
+        print(f"{self.name}: Initialized with stale threshold: {self.stale_threshold} cycles.")
+        self.blackboard.register_observer("status", self.on_blackboard_change)
+        # Also observe 'synthesized_knowledge' to react to its age
+        self.blackboard.register_observer("synthesized_knowledge", self.on_blackboard_change)
+
+    def on_blackboard_change(self, key, value):
+        # We want to check for staleness when the system is 'complete' and data exists
+        if key == "status" and value == "complete":
+            self._check_for_staleness()
+        # Also check if synthesized knowledge itself was updated
+        elif key == "synthesized_knowledge" and value is not None:
+            self._check_for_staleness()
+
+    def _check_for_staleness(self):
+        synthesized_data = self.blackboard.get_data("synthesized_knowledge")
+        if synthesized_data and "extracted_entities" in synthesized_data and \
+           "data_age" in synthesized_data["extracted_entities"]:
+            current_age = synthesized_data["extracted_entities"]["data_age"]
+            if current_age >= self.stale_threshold:
+                print(f"\n{self.name}: DETECTED STALE DATA! Synthesized knowledge is {current_age} cycles old (threshold: {self.stale_threshold}).")
+                print(f"{self.name}: Requesting data refresh from Orchestrator.")
+                # Trigger a data refresh by updating blackboard status
+                self.blackboard.set_data("human_feedback", "refresh data") # Simulate human asking for refresh
+                self.blackboard.set_status("awaiting_re_orchestration")
+            else:
+                print(f"{self.name}: Synthesized knowledge is fresh ({current_age} cycles). No refresh needed.")
+        else:
+            print(f"{self.name}: No synthesized knowledge or age info found to check staleness.")
 
 class HumanInTheLoopAgent:
     """
@@ -640,17 +651,14 @@ class HumanInTheLoopAgent:
         user_feedback = input(
             "Human-in-the-Loop: Please review the MARA report above. "
             "Do you have any feedback or a follow-up request? "
-            "(e.g., 'summarize key findings', 'articles by author Marco Perini', 'show article distribution by author', 'age data', or 'exit' to finish): "
+            "(e.g., 'summarize key findings', 'articles by author Marco Perini', "
+            "'show article distribution by author', 'age data', 'refresh data', or 'exit' to finish): "
         )
         print("--- END HUMAN INTERVENTION ---")
 
         if user_feedback.lower() == "exit":
             print(f"{self.name}: Received 'exit'. Ending human feedback loop.")
             self.blackboard.set_data("human_feedback", "User chose to exit.")
-        elif user_feedback.lower() == "age data": # New feedback to trigger data aging
-            print(f"{self.name}: Received 'age data' request. Setting status for data aging.")
-            self.blackboard.set_data("human_feedback", user_feedback)
-            self.blackboard.set_status("age_data_requested")
         else:
             print(f"{self.name}: Received human feedback: '{user_feedback}'. Posting to blackboard.")
             self.blackboard.set_data("human_feedback", user_feedback)
@@ -667,6 +675,7 @@ if __name__ == "__main__":
     knowledge_synthesis = KnowledgeSynthesisAgent("KnowledgeSynthesisAgent", shared_blackboard)
     data_validation = DataValidationAgent("DataValidationAgent", shared_blackboard)
     analysis_reporting = AnalysisAndReportingAgent("AnalysisAndReportingAgent", shared_blackboard)
+    data_refresh = DataRefreshAgent("DataRefreshAgent", shared_blackboard, stale_threshold=2) # Initialize refresh agent
     human_in_loop = HumanInTheLoopAgent("HumanInTheLoopAgent", shared_blackboard)
 
     print("\n--- Initiating Research Process ---")
@@ -676,29 +685,45 @@ if __name__ == "__main__":
     max_wait_time = 360 # Increased wait time for full workflow including human input and re-orchestration
     start_time = time.time()
     
+    # Main loop to simulate continuous operation and agent reactivity
+    run_cycles = 0
     while True:
         current_status = shared_blackboard.get_status()
-        print(f"Main: Current status: {current_status}...")
+        print(f"\nMain Loop Cycle {run_cycles}: Current status: {current_status}...")
+        
+        # Simulate passage of time and age data
+        if run_cycles > 0 and current_status not in ["awaiting_re_orchestration", "task_delegated_to_data_acquisition", "summarize_requested", "filter_by_author_requested", "visualize_requested"]:
+             shared_blackboard.age_data("synthesized_knowledge") # Age data each cycle
 
         if current_status == "awaiting_re_orchestration":
             orchestrator.process_feedback() 
-        elif current_status == "age_data_requested": # New condition for aging data
+        elif current_status == "age_data_requested":
+            # This status is now handled by DataRefreshAgent internally if it detects staleness
+            # The explicit 'age data' human command should just age data and then revert to complete
             shared_blackboard.age_data("synthesized_knowledge")
-            # After aging, we should let the user re-request a report to see the change
-            # or automatically regenerate the report. For now, we'll revert to 'complete'
-            # and rely on the user to request a report.
-            shared_blackboard.set_status("complete") 
-            print("Main: Data aging complete. Please request a new report to see updated age.")
+            shared_blackboard.set_status("complete") # Go back to complete so HumanInTheLoop can prompt again
+            print("Main: Data aging complete via human command. Please request a new report to see updated age.")
 
         elif current_status in ["complete", "failed", "unsupported_query", "complete_with_feedback"]:
-            break 
+            # If system is complete, let the HumanInTheLoop agent trigger its prompt
+            # If the DataRefreshAgent *proactively* triggers a refresh, the status will change
+            # to 'awaiting_re_orchestration' and the Orchestrator will pick it up.
+            pass # The loop will continue, allowing HumanInTheLoop or DataRefreshAgent to act
+
+
+        # Break conditions for the main workflow loop
+        if current_status in ["failed", "unsupported_query", "complete_with_feedback"] and shared_blackboard.get_data("human_feedback") and shared_blackboard.get_data("human_feedback").lower() == "exit":
+            print("Main: User exited the process.")
+            break
         
+        # Check if the process has been running too long without a clear completion/exit
         if (time.time() - start_time) > max_wait_time:
             print("Main: Workflow timed out.")
             shared_blackboard.set_status("timed_out") 
             break
         
-        time.sleep(2)
+        run_cycles += 1
+        time.sleep(2) # Short delay for readability in console
 
     print("\n--- Workflow Execution Finished ---")
     final_report = shared_blackboard.get_data("final_report")
