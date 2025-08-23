@@ -1,12 +1,13 @@
 
-from comm.blackboard import Blackboard
+
 import time
 
 class HumanInTheLoopAgent:
     """
     (Stub) The Human-in-the-Loop Agent will facilitate user feedback.
     """
-    def __init__(self, name: str, blackboard: Blackboard):
+    def __init__(self, name: str, blackboard):
+        from comm.blackboard import Blackboard
         self.name = name
         self.blackboard = blackboard
         print(f"{self.name}: Initialized.")

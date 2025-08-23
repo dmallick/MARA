@@ -1,5 +1,5 @@
 
-from comm.blackboard import Blackboard
+
 import time
 
 
@@ -7,7 +7,8 @@ class DataValidationAgent:
     """
     (Stub) The Data Validation Agent will perform quality checks on the data.
     """
-    def __init__(self, name: str, blackboard: Blackboard):
+    def __init__(self, name: str, blackboard):
+        from comm.blackboard import Blackboard
         self.name = name
         self.blackboard = blackboard
         print(f"{self.name}: Initialized.")

@@ -1,4 +1,4 @@
-from comm.blackboard import Blackboard
+
 import time
 
 
@@ -7,10 +7,12 @@ class AnalysisAndReportingAgent:
     The Analysis & Reporting Agent monitors the blackboard for 'data_validated' status.
     Once data is available, it processes it and generates the final report.
     """
-    def __init__(self, name: str, blackboard: Blackboard):
+    def __init__(self, name: str, blackboard):
+        from comm.blackboard import Blackboard  # Delayed import to avoid circular dependency
         self.name = name
         self.blackboard = blackboard
         print(f"{self.name}: Initialized.")
+        self.blackboard.register_observer("status", self.on_blackboard_change)
         self.blackboard.register_observer("status", self.on_blackboard_change)
 
     def on_blackboard_change(self, key, value):

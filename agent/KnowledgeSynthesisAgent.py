@@ -1,4 +1,4 @@
-from comm.blackboard import Blackboard
+
 import time
 import json
 
@@ -7,7 +7,8 @@ class KnowledgeSynthesisAgent:
     (Stub) The Knowledge Synthesis Agent will process raw data and build
     a structured knowledge base (e.g., a temporal knowledge graph).
     """
-    def __init__(self, name: str, blackboard: Blackboard):
+    def __init__(self, name: str, blackboard):
+        from comm.blackboard import Blackboard
         self.name = name
         self.blackboard = blackboard
         print(f"{self.name}: Initialized.")
