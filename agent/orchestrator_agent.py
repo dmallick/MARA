@@ -46,7 +46,8 @@ class OrchestratorAgent:
             summary_task = {"type": "summarize_findings", "from_data_key": "synthesized_knowledge", "original_query": original_query}
             self.blackboard.set_data("current_task", summary_task)
             self.blackboard.set_status("summarize_requested")
-        elif feedback and "articles by author" in feedback.lower():
+        elif feedback and "articles by author" in feedback.lower() and "how many" not in feedback.lower():
+            # Existing filter by author
             author_keyword_index = feedback.lower().find("articles by author")
             author_name_start_index = author_keyword_index + len("articles by author")
             author_name = feedback[author_name_start_index:].strip("?. ").strip()
@@ -68,6 +69,32 @@ class OrchestratorAgent:
             refresh_task = {"type": "web_scrape", "target": "articles_info", "source_url": "https://perinim.github.io/projects"}
             self.blackboard.set_data("current_task", refresh_task)
             self.blackboard.set_status("task_delegated_to_data_acquisition")
+        # --- NEW QUERY DELEGATION LOGIC ---
+        elif feedback and "how many articles by" in feedback.lower():
+            author_keyword_index = feedback.lower().find("how many articles by")
+            author_name_start_index = author_keyword_index + len("how many articles by")
+            author_name = feedback[author_name_start_index:].strip("?. ").strip()
+            if author_name:
+                print(f"{self.name}: Human requested count of articles by author '{author_name}'. Delegating query task to Knowledge Query Agent.")
+                query_task = {"type": "count_articles_by_author", "author": author_name, "original_query": original_query}
+                self.blackboard.set_data("current_task", query_task)
+                self.blackboard.set_status("query_requested")
+            else:
+                print(f"{self.name}: Could not extract author name for query from feedback: '{feedback}'.")
+                self.blackboard.set_status("complete_with_feedback")
+        elif feedback and "find articles about" in feedback.lower():
+            keyword_index = feedback.lower().find("find articles about")
+            keyword_start_index = keyword_index + len("find articles about")
+            keyword = feedback[keyword_start_index:].strip("?. ").strip()
+            if keyword:
+                print(f"{self.name}: Human requested articles containing keyword '{keyword}'. Delegating query task to Knowledge Query Agent.")
+                query_task = {"type": "find_articles_by_keyword", "keyword": keyword, "original_query": original_query}
+                self.blackboard.set_data("current_task", query_task)
+                self.blackboard.set_status("query_requested")
+            else:
+                print(f"{self.name}: Could not extract keyword for query from feedback: '{feedback}'.")
+                self.blackboard.set_status("complete_with_feedback")
+        # --- END NEW QUERY DELEGATION LOGIC ---
         else:
             print(f"{self.name}: Human feedback received but no specific follow-up action identified for: '{feedback}'.")
             self.blackboard.set_status("complete_with_feedback")

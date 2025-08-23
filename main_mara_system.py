@@ -13,6 +13,7 @@ from agent.data_validation_agent import DataValidationAgent
 from agent.analysis_reporting_agent import AnalysisAndReportingAgent
 from agent.data_refresh_agent import DataRefreshAgent
 from agent.human_in_the_loop_agent import HumanInTheLoopAgent
+from agent.knowledge_query_agent import KnowledgeQueryAgent # NEW: Import the KnowledgeQueryAgent
 
 # --- 1. Blackboard Implementation (Central Shared Repository) ---
 class Blackboard:
@@ -101,6 +102,7 @@ if __name__ == "__main__":
     analysis_reporting = AnalysisAndReportingAgent("AnalysisAndReportingAgent", shared_blackboard)
     data_refresh = DataRefreshAgent("DataRefreshAgent", shared_blackboard, stale_threshold=2)
     human_in_loop = HumanInTheLoopAgent("HumanInTheLoopAgent", shared_blackboard)
+    knowledge_query = KnowledgeQueryAgent("KnowledgeQueryAgent", shared_blackboard) # NEW: Instantiate the KnowledgeQueryAgent
 
     print("\n--- Initiating Research Process ---")
     user_initial_query = "List me all the articles on the page with their description and the author."
@@ -116,7 +118,7 @@ if __name__ == "__main__":
         
         if run_cycles > 0 and \
            "synthesized_knowledge" in shared_blackboard._data and \
-           current_status not in ["awaiting_re_orchestration", "task_delegated_to_data_acquisition", "summarize_requested", "filter_by_author_requested", "visualize_requested"]:
+           current_status not in ["awaiting_re_orchestration", "task_delegated_to_data_acquisition", "summarize_requested", "filter_by_author_requested", "visualize_requested", "query_requested"]: # Added "query_requested"
              shared_blackboard.age_data("synthesized_knowledge") 
 
         if current_status == "awaiting_re_orchestration":
