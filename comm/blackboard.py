@@ -71,6 +71,18 @@ class Blackboard:
                 callback(key, callback_value)
             except Exception as e:
                 print(f"Blackboard: Error notifying observer for '{key}': {e}")
+    
+    def age_data(self, key: str):
+        """
+        Increments the 'data_age' for a specific data entry on the blackboard
+        if it has a 'data_age' attribute.
+        """
+        with self._lock:
+            if key in self._data and isinstance(self._data[key], dict) and \
+               "extracted_entities" in self._data[key] and \
+               "data_age" in self._data[key]["extracted_entities"]:
+                self._data[key]["extracted_entities"]["data_age"] += 1
+                print(f"Blackboard: Data '{key}' aged to {self._data[key]['extracted_entities']['data_age']}.")
 
 
 # Instantiate the central blackboard
@@ -260,7 +272,7 @@ class KnowledgeSynthesisAgent:
     """
     The Knowledge Synthesis Agent processes raw data and extracts structured
     information, simulating the construction of a knowledge base.
-    Now includes timestamping to lay the foundation for a temporal knowledge graph.
+    Now includes timestamping and data aging to lay the foundation for a temporal knowledge graph.
     """
     def __init__(self, name: str, blackboard: Blackboard):
         self.name = name
@@ -277,7 +289,8 @@ class KnowledgeSynthesisAgent:
         raw_data = self.blackboard.get_data("raw_scraped_data")
 
         if raw_data:
-            synthesized_output = {"articles_summary": [], "authors": set(), "timestamp": datetime.now().isoformat()} # Added timestamp
+            # Added data_age initialization here
+            synthesized_output = {"articles_summary": [], "authors": set(), "timestamp": datetime.now().isoformat(), "data_age": 0} 
             if isinstance(raw_data, dict) and "content" in raw_data and isinstance(raw_data["content"], list):
                 for article in raw_data["content"]:
                     title = article.get("title", "N/A")
@@ -302,7 +315,7 @@ class KnowledgeSynthesisAgent:
             }
             self.blackboard.set_data("synthesized_knowledge", synthesized_data)
             self.blackboard.set_status("knowledge_synthesized")
-            print(f"{self.name}: Knowledge synthesis complete. Synthesized data posted (with timestamp).")
+            print(f"{self.name}: Knowledge synthesis complete. Synthesized data posted (with timestamp and age).")
             print(f"Synthesized knowledge (partial view): {json.dumps(synthesized_data, indent=2)[:500]}...")
         else:
             print(f"{self.name}: No raw data found for synthesis. Setting status to 'knowledge_synthesis_failed'.")
@@ -383,7 +396,10 @@ class AnalysisAndReportingAgent:
         report_text = "### MARA Research Report\n\n"
         report_text += f"**Overall Process Status:** {self.blackboard.get_status()}\n\n"
         if synthesized_data and "timestamp" in synthesized_data["extracted_entities"]: # Display timestamp
-             report_text += f"**Report Generated At:** {synthesized_data['extracted_entities']['timestamp']}\n\n"
+             report_text += f"**Report Generated At:** {synthesized_data['extracted_entities']['timestamp']}\n"
+             # Display data age
+             report_text += f"**Synthesized Data Age:** {synthesized_data['extracted_entities'].get('data_age', 'N/A')} cycles\n\n"
+
 
         if raw_data:
             report_text += "#### Scraped Articles Overview (Raw Data):\n\n"
@@ -443,7 +459,9 @@ class AnalysisAndReportingAgent:
 
         summary_report_text = f"### MARA Research Report - Key Findings Summary\n\n"
         if synthesized_data and "timestamp" in synthesized_data["extracted_entities"]:
-             summary_report_text += f"**Summary Generated At:** {synthesized_data['extracted_entities']['timestamp']}\n\n"
+             summary_report_text += f"**Summary Generated At:** {synthesized_data['extracted_entities']['timestamp']}\n"
+             # Display data age
+             summary_report_text += f"**Synthesized Data Age:** {synthesized_data['extracted_entities'].get('data_age', 'N/A')} cycles\n\n"
 
         if synthesized_data and synthesized_data.get("extracted_entities", {}).get("articles_summary"):
             all_summaries = synthesized_data["extracted_entities"]["articles_summary"]
@@ -477,8 +495,14 @@ class AnalysisAndReportingAgent:
 
         author_to_filter = task.get("author")
         raw_data = self.blackboard.get_data(task.get("from_data_key", "raw_scraped_data"))
+        synthesized_data = self.blackboard.get_data("synthesized_knowledge") # Get synthesized data for timestamp
 
         filter_report_text = f"### MARA Research Report - Articles by Author: '{author_to_filter}'\n\n"
+        if synthesized_data and "timestamp" in synthesized_data["extracted_entities"]:
+             filter_report_text += f"**Generated At:** {synthesized_data['extracted_entities']['timestamp']}\n"
+             # Display data age
+             filter_report_text += f"**Synthesized Data Age:** {synthesized_data['extracted_entities'].get('data_age', 'N/A')} cycles\n\n"
+        
         found_articles = []
 
         if raw_data and isinstance(raw_data, dict) and "content" in raw_data and isinstance(raw_data["content"], list):
@@ -521,7 +545,9 @@ class AnalysisAndReportingAgent:
 
         viz_report_text = f"### MARA Research Report - Article Distribution by Author (ASCII Bar Chart)\n\n"
         if synthesized_data and "timestamp" in synthesized_data["extracted_entities"]:
-             viz_report_text += f"**Generated At:** {synthesized_data['extracted_entities']['timestamp']}\n\n"
+             viz_report_text += f"**Generated At:** {synthesized_data['extracted_entities']['timestamp']}\n"
+             # Display data age
+             viz_report_text += f"**Synthesized Data Age:** {synthesized_data['extracted_entities'].get('data_age', 'N/A')} cycles\n\n"
         
         if raw_data and isinstance(raw_data, dict) and "content" in raw_data and isinstance(raw_data["content"], list):
             author_counts = defaultdict(int)
@@ -614,13 +640,17 @@ class HumanInTheLoopAgent:
         user_feedback = input(
             "Human-in-the-Loop: Please review the MARA report above. "
             "Do you have any feedback or a follow-up request? "
-            "(e.g., 'summarize key findings', 'articles by author Marco Perini', 'show article distribution by author', or 'exit' to finish): "
+            "(e.g., 'summarize key findings', 'articles by author Marco Perini', 'show article distribution by author', 'age data', or 'exit' to finish): "
         )
         print("--- END HUMAN INTERVENTION ---")
 
         if user_feedback.lower() == "exit":
             print(f"{self.name}: Received 'exit'. Ending human feedback loop.")
             self.blackboard.set_data("human_feedback", "User chose to exit.")
+        elif user_feedback.lower() == "age data": # New feedback to trigger data aging
+            print(f"{self.name}: Received 'age data' request. Setting status for data aging.")
+            self.blackboard.set_data("human_feedback", user_feedback)
+            self.blackboard.set_status("age_data_requested")
         else:
             print(f"{self.name}: Received human feedback: '{user_feedback}'. Posting to blackboard.")
             self.blackboard.set_data("human_feedback", user_feedback)
@@ -643,7 +673,7 @@ if __name__ == "__main__":
     user_initial_query = "List me all the articles on the page with their description and the author."
     orchestrator.run(user_initial_query)
 
-    max_wait_time = 300 # Increased wait time for full workflow including human input and re-orchestration
+    max_wait_time = 360 # Increased wait time for full workflow including human input and re-orchestration
     start_time = time.time()
     
     while True:
@@ -652,6 +682,14 @@ if __name__ == "__main__":
 
         if current_status == "awaiting_re_orchestration":
             orchestrator.process_feedback() 
+        elif current_status == "age_data_requested": # New condition for aging data
+            shared_blackboard.age_data("synthesized_knowledge")
+            # After aging, we should let the user re-request a report to see the change
+            # or automatically regenerate the report. For now, we'll revert to 'complete'
+            # and rely on the user to request a report.
+            shared_blackboard.set_status("complete") 
+            print("Main: Data aging complete. Please request a new report to see updated age.")
+
         elif current_status in ["complete", "failed", "unsupported_query", "complete_with_feedback"]:
             break 
         
