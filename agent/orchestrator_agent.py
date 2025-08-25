@@ -40,7 +40,6 @@ class OrchestratorAgent:
         Your goal is to decompose a user's complex research query into a structured task
         that can be delegated to specialized agents.
 
-        Based on the user query, determine the primary action and any necessary parameters.
         Your system currently supports the following primary actions:
         - "web_scrape": For gathering raw data from a specific URL. Requires 'source_url', 'target_info'.
             Example: {{"action": "web_scrape", "source_url": "https://perinim.github.io/projects", "target_info": "articles, descriptions, authors"}}
@@ -54,6 +53,10 @@ class OrchestratorAgent:
             Example: {{"action": "count_articles_by_author", "author_name": "Marco Perini"}}
         - "find_articles_by_keyword": For finding articles containing a specific keyword. Requires 'keyword'.
             Example: {{"action": "find_articles_by_keyword", "keyword": "DQN"}}
+        - "identify_prolific_author": For identifying the author with the most articles.
+            Example: {{"action": "identify_prolific_author"}}
+        - "check_for_changes": For proactively checking the source for new articles or changes.
+            Example: {{"action": "check_for_changes"}}
         - "refresh_data": For triggering a full data re-acquisition.
             Example: {{"action": "refresh_data"}}
         - "unsupported_query": If the query cannot be handled by the current agent capabilities. Requires 'reason'.
@@ -108,7 +111,9 @@ class OrchestratorAgent:
         else:
             print(f"{self.name}: LLM returned a feedback-like action '{action}' or could not fully decompose. "
                   "Proceeding with potential manual feedback for initial query or refining LLM instruction.")
-            if action in ["summarize_findings", "filter_by_author", "visualize_author_distribution", "count_articles_by_author", "find_articles_by_keyword", "refresh_data"]:
+            if action in ["summarize_findings", "filter_by_author", "visualize_author_distribution", 
+                          "count_articles_by_author", "find_articles_by_keyword", "identify_prolific_author", 
+                          "check_for_changes", "refresh_data"]: # Added check_for_changes
                  # Create a dummy human feedback to trigger the process_feedback path in the main loop
                  # Store the decomposed task directly in human_feedback as JSON string for process_feedback to parse
                  self.blackboard.set_data("human_feedback", json.dumps(decomposed_task))
@@ -195,44 +200,48 @@ class OrchestratorAgent:
                 else:
                     print(f"{self.name}: LLM-suggested find articles by keyword, but no keyword parameter found.")
                     self.blackboard.set_status("complete_with_feedback")
+            elif action == "identify_prolific_author":
+                print(f"{self.name}: LLM-suggested identify prolific author. Delegating task to Analysis & Reporting Agent.")
+                prolific_task = {"type": "identify_prolific_author", "original_query": original_query}
+                self.blackboard.set_data("current_task", prolific_task)
+                self.blackboard.set_status("prolific_author_requested")
+            elif action == "check_for_changes": # NEW: Handle LLM-suggested check_for_changes
+                print(f"{self.name}: LLM-suggested check for changes. Delegating task to Change Detection Agent.")
+                change_task = {"type": "check_for_changes", "original_query": original_query}
+                self.blackboard.set_data("current_task", change_task)
+                self.blackboard.set_status("check_for_changes_requested")
             else:
                 print(f"{self.name}: LLM-generated feedback with unrecognized action: '{action}'.")
                 self.blackboard.set_status("complete_with_feedback")
         else:
             # Handle plain text human feedback (existing keyword-based logic)
-            lower_feedback = feedback_raw.lower() # Convert to lowercase once for efficiency
+            lower_feedback = feedback_raw.lower()
             
             author_name = None
             query_task_type = None
 
-            # NEW Pattern 1: "how many articles did [author] publish"
             if "how many articles did" in lower_feedback and "publish" in lower_feedback:
                 did_idx = lower_feedback.find("did")
                 publish_idx = lower_feedback.find("publish", did_idx)
                 if did_idx != -1 and publish_idx != -1 and publish_idx > did_idx:
-                    # Extract text between "did" and "publish" for the author
                     author_phrase = feedback_raw[did_idx + len("did"):publish_idx].strip()
                     if author_phrase:
                         author_name = author_phrase
                         query_task_type = "count_articles_by_author"
             
-            # Pattern 2: "how many articles by [author]" (only if Pattern 1 wasn't matched)
             if query_task_type is None and "how many articles by" in lower_feedback:
                 author_keyword_index = lower_feedback.find("how many articles by")
                 author_name_start_index = author_keyword_index + len("how many articles by")
-                # Extract author name from the original raw feedback
                 author_name = feedback_raw[author_name_start_index:].strip("?. ").strip()
                 if author_name:
                     query_task_type = "count_articles_by_author"
 
-            # Delegate if a count_articles_by_author pattern was successfully matched and author_name extracted
             if query_task_type == "count_articles_by_author" and author_name:
                 print(f"{self.name}: Human requested count of articles by author '{author_name}'. Delegating query task to Knowledge Query Agent.")
                 query_task = {"type": "count_articles_by_author", "author": author_name, "original_query": original_query}
                 self.blackboard.set_data("current_task", query_task)
                 self.blackboard.set_status("query_requested")
             
-            # Original keyword-based parsing for other types of feedback
             elif "summarize key findings" in lower_feedback:
                 print(f"{self.name}: Human requested summary of key findings. Delegating summary task to Analysis & Reporting Agent.")
                 summary_task = {"type": "summarize_findings", "from_data_key": "synthesized_knowledge", "original_query": original_query}
@@ -272,6 +281,16 @@ class OrchestratorAgent:
                 else:
                     print(f"{self.name}: Could not extract keyword for query from feedback: '{feedback_raw}'.")
                     self.blackboard.set_status("complete_with_feedback")
+            elif "who is the most prolific author" in lower_feedback or "most prolific author" in lower_feedback:
+                print(f"{self.name}: Human requested identification of the most prolific author. Delegating task to Analysis & Reporting Agent.")
+                prolific_task = {"type": "identify_prolific_author", "original_query": original_query}
+                self.blackboard.set_data("current_task", prolific_task)
+                self.blackboard.set_status("prolific_author_requested")
+            elif "check for new articles" in lower_feedback or "detect changes" in lower_feedback: # NEW: Handle plain text for change detection
+                print(f"{self.name}: Human requested check for new articles/changes. Delegating task to Change Detection Agent.")
+                change_task = {"type": "check_for_changes", "original_query": original_query}
+                self.blackboard.set_data("current_task", change_task)
+                self.blackboard.set_status("check_for_changes_requested")
             else:
                 print(f"{self.name}: Human feedback received but no specific follow-up action identified for: '{feedback_raw}'.")
                 self.blackboard.set_status("complete_with_feedback")

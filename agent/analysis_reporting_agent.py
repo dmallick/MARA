@@ -1,6 +1,6 @@
 import time
 import json
-from collections import defaultdict # Used for visualizations
+from collections import defaultdict # Used for visualizations and counting
 from datetime import datetime # Used for timestamps
 
 class AnalysisAndReportingAgent:
@@ -9,6 +9,8 @@ class AnalysisAndReportingAgent:
     Once data is available, it processes it, generates insights, and compiles the final report.
     It can also generate a summary of key findings upon request or visualize data.
     Updated to handle the new knowledge graph structure.
+    Now includes functionality to identify the most prolific author.
+    Now includes functionality to report change detection results.
     """
     def __init__(self, name: str, blackboard):
         self.name = name
@@ -25,6 +27,10 @@ class AnalysisAndReportingAgent:
             self.execute_filter_by_author_task()
         elif key == "status" and value == "visualize_requested":
             self.execute_visualization_task()
+        elif key == "status" and value == "prolific_author_requested":
+            self.execute_prolific_author_task()
+        elif key == "status" and value in ["changes_detected", "no_changes_detected"]: # NEW: Listen for change detection results
+            self.execute_change_detection_report()
         elif key == "status" and (value in ["data_acquisition_failed", "unsupported_query", "knowledge_synthesis_failed", "data_validation_failed", "failed"]):
             self.execute_failure_report()
 
@@ -290,6 +296,72 @@ class AnalysisAndReportingAgent:
         self.blackboard.set_data("final_report", viz_report_text)
         self.blackboard.set_status("complete")
         print(f"{self.name}: Article distribution by author generated from knowledge graph and posted.")
+        time.sleep(1)
+
+    def execute_prolific_author_task(self):
+        """
+        Identifies and reports the most prolific author from the knowledge graph.
+        """
+        print(f"\n{self.name}: Task received: Identify most prolific author. Analyzing knowledge graph.")
+        task = self.blackboard.get_data("current_task")
+        synthesized_data = self.blackboard.get_data("synthesized_knowledge")
+
+        prolific_report_text = f"### MARA Research Report - Most Prolific Author\n\n"
+        prolific_report_text += f"**Original Query:** '{task.get('original_query', 'N/A')}'\n"
+        prolific_report_text += f"**Requested Follow-up:** '{self.blackboard.get_data('human_feedback')}'\n\n"
+
+        if not synthesized_data or "extracted_entities" not in synthesized_data or \
+           "nodes" not in synthesized_data["extracted_entities"] or \
+           "relationships" not in synthesized_data["extracted_entities"]:
+            prolific_report_text += "Error: No structured knowledge graph available to identify prolific author."
+            self.blackboard.set_data("final_report", prolific_report_text)
+            self.blackboard.set_status("failed")
+            print(f"{self.name}: Failed to identify prolific author: No knowledge graph.")
+            return
+
+        nodes = synthesized_data["extracted_entities"]["nodes"]
+        relationships = synthesized_data["extracted_entities"]["relationships"]
+        authors = nodes.get("authors", [])
+
+        author_article_counts = defaultdict(int)
+        for rel in relationships:
+            if rel['type'] == 'AUTHORED_BY':
+                author_id = rel['target_id']
+                author_name = next((a['properties']['name'] for a in authors if a['id'] == author_id), "Unknown Author")
+                author_article_counts[author_name] += 1
+        
+        if author_article_counts:
+            most_prolific_author = max(author_article_counts, key=author_article_counts.get)
+            max_articles = author_article_counts[most_prolific_author]
+            prolific_report_text += f"**Insight:** The most prolific author identified is **'{most_prolific_author}'** with {max_articles} article(s).\n"
+        else:
+            prolific_report_text += "No authors or articles found in the knowledge graph to identify the most prolific author.\n"
+
+        self.blackboard.set_data("final_report", prolific_report_text)
+        self.blackboard.set_status("complete")
+        print(f"{self.name}: Most prolific author identified and report posted.")
+        time.sleep(1)
+
+    def execute_change_detection_report(self): # NEW: Method to report change detection results
+        """
+        Reports the findings from the Change Detection Agent.
+        """
+        print(f"\n{self.name}: Task received: Report change detection results.")
+        change_report = self.blackboard.get_data("change_detection_report")
+        current_status = self.blackboard.get_status() # Will be "changes_detected" or "no_changes_detected"
+
+        report_text = f"### MARA Change Monitoring Update\n\n"
+        report_text += f"**Overall Status of Change Detection:** {current_status.replace('_', ' ').title()}\n\n"
+        
+        if change_report:
+            report_text += change_report # Directly embed the report from ChangeDetectionAgent
+        else:
+            report_text += "No specific change detection report found on the blackboard."
+
+        self.blackboard.set_data("final_report", report_text)
+        # Status is already set by ChangeDetectionAgent, just ensuring report is complete
+        self.blackboard.set_status("complete") 
+        print(f"{self.name}: Change detection report compiled and posted.")
         time.sleep(1)
 
 

@@ -16,6 +16,8 @@ class HumanInTheLoopAgent:
             self.execute_feedback_prompt()
         elif key == "status" and value == "complete_with_feedback":
             self.execute_feedback_prompt()
+        elif key == "status" and value in ["changes_detected", "no_changes_detected"]: # NEW: Trigger prompt after change detection
+            self.execute_feedback_prompt()
 
 
     def execute_feedback_prompt(self):
@@ -26,7 +28,8 @@ class HumanInTheLoopAgent:
             "Human-in-the-Loop: Please review the MARA report above. "
             "Do you have any feedback or a follow-up request? "
             "(e.g., 'summarize key findings', 'articles by author Marco Perini', "
-            "'show article distribution by author', 'age data', 'refresh data', or 'exit' to finish): "
+            "'how many articles did Marco Perini publish?', 'find articles about DQN', "
+            "'who is the most prolific author?', 'check for new articles', 'refresh data', or 'exit' to finish): " # Added check for new articles
         )
         print("--- END HUMAN INTERVENTION ---")
 

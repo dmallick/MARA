@@ -13,7 +13,8 @@ from agent.data_validation_agent import DataValidationAgent
 from agent.analysis_reporting_agent import AnalysisAndReportingAgent
 from agent.data_refresh_agent import DataRefreshAgent
 from agent.human_in_the_loop_agent import HumanInTheLoopAgent
-from agent.knowledge_query_agent import KnowledgeQueryAgent # NEW: Import the KnowledgeQueryAgent
+from agent.knowledge_query_agent import KnowledgeQueryAgent
+from agent.change_detection_agent import ChangeDetectionAgent # NEW: Import ChangeDetectionAgent
 
 # --- 1. Blackboard Implementation (Central Shared Repository) ---
 class Blackboard:
@@ -102,7 +103,9 @@ if __name__ == "__main__":
     analysis_reporting = AnalysisAndReportingAgent("AnalysisAndReportingAgent", shared_blackboard)
     data_refresh = DataRefreshAgent("DataRefreshAgent", shared_blackboard, stale_threshold=2)
     human_in_loop = HumanInTheLoopAgent("HumanInTheLoopAgent", shared_blackboard)
-    knowledge_query = KnowledgeQueryAgent("KnowledgeQueryAgent", shared_blackboard) # NEW: Instantiate the KnowledgeQueryAgent
+    knowledge_query = KnowledgeQueryAgent("KnowledgeQueryAgent", shared_blackboard)
+    # NEW: Instantiate ChangeDetectionAgent, passing required dependencies
+    change_detection = ChangeDetectionAgent("ChangeDetectionAgent", shared_blackboard, data_acquisition, knowledge_synthesis) 
 
     print("\n--- Initiating Research Process ---")
     user_initial_query = "List me all the articles on the page with their description and the author."
@@ -118,7 +121,9 @@ if __name__ == "__main__":
         
         if run_cycles > 0 and \
            "synthesized_knowledge" in shared_blackboard._data and \
-           current_status not in ["awaiting_re_orchestration", "task_delegated_to_data_acquisition", "summarize_requested", "filter_by_author_requested", "visualize_requested", "query_requested"]: # Added "query_requested"
+           current_status not in ["awaiting_re_orchestration", "task_delegated_to_data_acquisition", 
+                                  "summarize_requested", "filter_by_author_requested", "visualize_requested", 
+                                  "query_requested", "check_for_changes_requested", "prolific_author_requested"]: # Added new statuses
              shared_blackboard.age_data("synthesized_knowledge") 
 
         if current_status == "awaiting_re_orchestration":
@@ -129,7 +134,8 @@ if __name__ == "__main__":
             print("Main: Data aging complete via human command. Please request a new report to see updated age.")
 
         if shared_blackboard.get_data("human_feedback") and shared_blackboard.get_data("human_feedback").lower() == "exit" and \
-           current_status in ["complete", "failed", "unsupported_query", "complete_with_feedback"]:
+           current_status in ["complete", "failed", "unsupported_query", "complete_with_feedback", 
+                              "changes_detected", "no_changes_detected"]: # Added new statuses
             print("Main: User explicitly exited the process.")
             break
         elif current_status in ["failed", "unsupported_query", "timed_out"]:
